@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Daily at 7am. If the Mac is asleep then, launchd runs it on wake.
+     Replace YOU with your username, then:
+       cp deploy/com.themikemoniker.youtube-brain.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.themikemoniker.youtube-brain.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.themikemoniker.youtube-brain</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/go/bin/youtube-brain</string>
+    <string>run</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardOutPath</key><string>/tmp/youtube-brain.log</string>
+  <key>StandardErrorPath</key><string>/tmp/youtube-brain.log</string>
+</dict>
+</plist>

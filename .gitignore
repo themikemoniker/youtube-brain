@@ -1,0 +1,5 @@
+# Secrets live in ~/.config/youtube-brain/, never here. This catches copies made by mistake.
+*.json
+!apps-script/appsscript.json
+.env*
+/youtube-brain
