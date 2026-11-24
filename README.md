@@ -1,7 +1,10 @@
 # YouTube Brain
 
-Save a video to a private "Digest" playlist and the next daily run summarizes it with Gemini. Each video gets a
+Save a video to a private "Digest" playlist and the next run summarizes it with Gemini. Each video gets a detailed
 Markdown note in a Drive folder and a row in an index Sheet, then moves to a "Summarized" playlist.
+
+A note is meant to replace watching: a TL;DR, the key claim, a timestamped walkthrough, the steps and commands shown,
+the tools mentioned, how popular and well received the video is, and how well it fits your own setup.
 
 ## Why it's built this way
 
@@ -17,12 +20,18 @@ Markdown note in a Drive folder and a row in an index Sheet, then moves to a "Su
   out. The CLI waits 5 minutes. The Apps Script version is still in [`apps-script/`](apps-script/) if you'd rather not
   run anything yourself.
 - **The `drive.file` scope.** The app can only see the files it creates, not the rest of your Drive.
+- **Reception from stats and top comments.** Gemini gets the views, likes, subscriber count, views per day and the 20
+  most relevant comments, so it can say whether a video is a hit and what viewers dispute. These cost 3 quota units a
+  video; if they fail, the summary goes ahead without them.
+- **Fit from a private profile.** `~/.config/youtube-brain/profile.md` describes your machines, tools and taste in
+  plain words, and Gemini rates each video great/good/meh/poor against it. It lives outside the repo because it's
+  about you. On the free tier, Google may use prompts to improve its models, so keep it to what you'd share.
 
 ## How it behaves
 
 - A video that already has a Sheet row is skipped. Delete its row to retry it.
-- When Gemini returns 429 (the free-tier daily limit) or 503 (overloaded), the run stops and the rest waits for the
-  next run, so a large backlog drains over several days. `run --max N` caps a run at N videos.
+- A 503 (Gemini overloaded) is retried twice, 30s and 60s apart. If it persists, or Gemini returns 429 (the free-tier
+  daily limit), the run stops and the rest waits for the next run, so a large backlog drains over several days. `run --max N` caps a run at N videos.
 - Any other failure, including a timeout, gets an `error` row and the video stays in Digest.
 - A video moves by being added to Summarized first, then removed from Digest, so it's never in neither.
 
@@ -45,8 +54,11 @@ All files live in `~/.config/youtube-brain/`, outside the repo.
    go install github.com/themikemoniker/youtube-brain@latest
    youtube-brain test 'https://www.youtube.com/watch?v=9hE5-98ZeCg'   # checks the key; writes nothing
    youtube-brain auth    # two Google sign-ins (Google refuses YouTube and Drive in one), saves two tokens
-   youtube-brain setup   # creates the folder, Sheet and playlists; prints the Digest link
+   youtube-brain setup   # creates the folder, Sheet and playlists; prints the Digest link. Rerun after upgrading
+                         # to add new Sheet columns.
    ```
+5. **Profile (optional).** Write `~/.config/youtube-brain/profile.md`: your machines, tools, languages, interests and
+   what "fits" means to you. Without it, the fit rating has nothing to go on.
 
 To move your Watch Later backlog over, open Watch Later, select videos, and choose "Save to playlist" → Digest.
 
@@ -56,11 +68,16 @@ Examples are in [`deploy/`](deploy/), with install commands in each file's comme
 
 - **Mac:** `com.themikemoniker.youtube-brain.plist`, a launchd agent that runs at 7am, or on wake if the Mac was
   asleep.
-- **Linux:** `youtube-brain.service` and `youtube-brain.timer`, a systemd user timer with `Persistent=true` so a
-  missed run catches up.
+- **Linux:** `youtube-brain.service` and `youtube-brain.timer`, a systemd user timer that runs four times a day,
+  with `Persistent=true` so a missed run catches up. Use this on an always-on box so summaries keep coming while your
+  laptop is off; the service file has the cross-compile and copy steps.
+
+Run it on one machine only. Two runners could summarize the same video twice.
 
 ## Model
 
 `model` in `brain.go` is the only place the model name lives. It is Flash-Lite because the bigger Flash models were
-overloaded (503) on the free tier, and Lite costs about a third as much if you ever turn on billing. The Apps Script's optional daily email isn't in the
-CLI; the Sheet is the digest.
+overloaded (503) on the free tier, and Lite costs about a third as much if you ever turn on billing.
+
+The Apps Script version keeps the original short notes; the stats, comments and profile are CLI-only. Its optional
+daily email isn't in the CLI either; the Sheet is the digest.

@@ -1,10 +1,13 @@
-# User unit. Install with the timer:
+# User unit. deux has no Go, so build on the Mac and copy the binary:
+#   GOOS=linux GOARCH=amd64 go build -o /tmp/youtube-brain-linux . && scp /tmp/youtube-brain-linux HOST:.local/bin/youtube-brain
+# Copy ~/.config/youtube-brain/ over too (client_secret.json, token-*.json, config.json, profile.md). Then:
 #   cp deploy/youtube-brain.{service,timer} ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now youtube-brain.timer
 #   loginctl enable-linger $USER   # so it runs while you're logged out
+# Logs: journalctl --user -u youtube-brain
 [Unit]
 Description=Summarize the YouTube Digest playlist
 
 [Service]
 Type=oneshot
-ExecStart=%h/go/bin/youtube-brain run
+ExecStart=%h/.local/bin/youtube-brain run

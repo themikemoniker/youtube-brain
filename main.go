@@ -13,7 +13,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -31,9 +33,10 @@ const usage = `usage: youtube-brain <command>
   auth         sign in to Google and save the token
   setup        create the Drive folder, index Sheet and both playlists (safe to rerun)
   run [--max N] summarize new videos in Digest
-  test <url>   summarize one video and print it, writing nothing
+  test <url>   summarize one video and print the note, writing nothing
 
-Files live in ~/.config/youtube-brain/: client_secret.json (your OAuth client), token-youtube.json and token-drive.json, config.json.
+Files live in ~/.config/youtube-brain/: client_secret.json (your OAuth client), token-youtube.json and token-drive.json, config.json,
+and optionally profile.md (your setup, for the "fit" commentary).
 The Gemini key comes from GEMINI_API_KEY or "gemini_api_key" in config.json.`
 
 // Google refuses the YouTube and drive.file scopes in one sign-in, so auth asks twice and saves two tokens.
@@ -121,7 +124,7 @@ func gemini(c Config) (Gemini, error) {
 		return Gemini{}, fmt.Errorf("no Gemini key: set GEMINI_API_KEY or add \"gemini_api_key\" to %s", filepath.Join(dir, "config.json"))
 	}
 	// Long videos take minutes; Apps Script's 60-second cap is why it failed on them.
-	return Gemini{Key: key, Base: "https://generativelanguage.googleapis.com", Client: &http.Client{Timeout: 5 * time.Minute}}, nil
+	return Gemini{Key: key, Base: "https://generativelanguage.googleapis.com", Client: &http.Client{Timeout: 5 * time.Minute}, Backoff: 30 * time.Second}, nil
 }
 
 func oauthConfig(g grant) (*oauth2.Config, error) {
@@ -265,13 +268,15 @@ func setup() error {
 		if err != nil {
 			return fmt.Errorf("creating the index Sheet: %w", err)
 		}
-		if err := (sheetIndex{s, f.Id}).Append(header); err != nil {
-			return fmt.Errorf("writing the Sheet header: %w", err)
-		}
 		c.SheetID = f.Id
 		if err := writeJSON("config.json", c); err != nil {
 			return err
 		}
+	}
+	// Always rewrite the header, so rerunning setup adds columns from newer versions to an existing Sheet.
+	if _, err := s.sh.Spreadsheets.Values.Update(c.SheetID, "A1", &sheets.ValueRange{Values: [][]any{toAny(header)}}).
+		ValueInputOption("RAW").Do(); err != nil {
+		return fmt.Errorf("writing the Sheet header: %w", err)
 	}
 	for _, p := range []struct {
 		id    *string
@@ -314,7 +319,7 @@ func run(max int) error {
 	}
 	n, err := Brain{
 		YT: ytPlaylists{s}, Notes: driveNotes{s, c.FolderID}, Index: sheetIndex{s, c.SheetID},
-		Summarize: g.Summarize, Digest: c.DigestPlaylistID, Summarized: c.SummarizedPlaylistID, Now: time.Now,
+		Summarize: g.Summarize, Profile: profile(), Digest: c.DigestPlaylistID, Summarized: c.SummarizedPlaylistID, Now: time.Now,
 	}.Run(max)
 	log.Printf("Summarized %d video(s).", n)
 	return err
@@ -329,13 +334,38 @@ func test(url string) error {
 	if err != nil {
 		return err
 	}
-	sum, err := g.Summarize(url)
+	// Stats and comments need the YouTube sign-in; without it the test still works, just without them.
+	var d Details
+	id := videoID(url)
+	if s, err := connect(); err != nil {
+		log.Printf("no stats (%v)", err)
+	} else if d, err = (ytPlaylists{s}).Details(id); err != nil {
+		log.Printf("no stats: %v", err)
+	}
+	now := time.Now()
+	sum, err := g.Summarize(url, Context(d, profile(), now))
 	if err != nil {
 		return err
 	}
-	b, _ := json.MarshalIndent(sum, "", "  ")
-	fmt.Println(string(b))
+	fmt.Print(NoteMarkdown(Item{VideoID: id, Title: "(test) " + id, Added: now.Format("2006-01-02")}, url, d, sum, now))
 	return nil
+}
+
+func profile() string {
+	b, _ := os.ReadFile(filepath.Join(dir, "profile.md")) // optional
+	return string(b)
+}
+
+// videoID pulls the id out of a watch, youtu.be or shorts URL.
+func videoID(raw string) string {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	if v := u.Query().Get("v"); v != "" {
+		return v
+	}
+	return path.Base(u.Path)
 }
 
 type ytPlaylists struct{ *services }
@@ -350,6 +380,32 @@ func (y ytPlaylists) Items(playlistID string) ([]Item, error) {
 		return nil
 	})
 	return out, err
+}
+
+func (y ytPlaylists) Details(id string) (Details, error) {
+	var d Details
+	r, err := y.yt.Videos.List([]string{"snippet", "statistics", "contentDetails"}).Id(id).Do()
+	if err != nil {
+		return d, err
+	}
+	if len(r.Items) == 0 {
+		return d, errors.New("video not found")
+	}
+	v := r.Items[0]
+	d.Views, d.Likes, d.Comments = int64(v.Statistics.ViewCount), int64(v.Statistics.LikeCount), int64(v.Statistics.CommentCount)
+	d.Duration = ParseISODuration(v.ContentDetails.Duration)
+	d.Uploaded, _ = time.Parse(time.RFC3339, v.Snippet.PublishedAt)
+	// Subscribers and comments are extras: comments can be disabled, and neither is worth failing over.
+	if c, err := y.yt.Channels.List([]string{"statistics"}).Id(v.Snippet.ChannelId).Do(); err == nil && len(c.Items) > 0 {
+		d.Subscribers = int64(c.Items[0].Statistics.SubscriberCount)
+	}
+	if c, err := y.yt.CommentThreads.List([]string{"snippet"}).VideoId(id).Order("relevance").MaxResults(20).TextFormat("plainText").Do(); err == nil {
+		for _, t := range c.Items {
+			sn := t.Snippet.TopLevelComment.Snippet
+			d.TopComments = append(d.TopComments, fmt.Sprintf("(%d likes) %s", sn.LikeCount, trunc(sn.TextDisplay, 300)))
+		}
+	}
+	return d, nil
 }
 
 // Move copies, then removes: the video is never in neither playlist.
@@ -397,11 +453,15 @@ func (s sheetIndex) Seen() (map[string]bool, error) {
 }
 
 func (s sheetIndex) Append(row []string) error {
+	_, err := s.sh.Spreadsheets.Values.Append(s.id, "A1", &sheets.ValueRange{Values: [][]any{toAny(row)}}).
+		ValueInputOption("RAW").InsertDataOption("INSERT_ROWS").Do()
+	return err
+}
+
+func toAny(row []string) []any {
 	vals := make([]any, len(row))
 	for i, v := range row {
 		vals[i] = v
 	}
-	_, err := s.sh.Spreadsheets.Values.Append(s.id, "A1", &sheets.ValueRange{Values: [][]any{vals}}).
-		ValueInputOption("RAW").InsertDataOption("INSERT_ROWS").Do()
-	return err
+	return vals
 }

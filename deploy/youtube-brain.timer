@@ -1,8 +1,10 @@
+# Four runs a day: a run that stops on a Gemini 503 picks up again in hours, not tomorrow.
+# A run with nothing new costs two API calls.
 [Unit]
-Description=Run youtube-brain daily at 7am
+Description=Run youtube-brain four times a day
 
 [Timer]
-OnCalendar=*-*-* 07:00
+OnCalendar=*-*-* 01,07,13,19:00
 Persistent=true
 
 [Install]
