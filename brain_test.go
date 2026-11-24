@@ -53,14 +53,14 @@ func TestGeminiRequestAndParse(t *testing.T) {
 }
 
 func TestGeminiErrors(t *testing.T) {
-	for code, want := range map[int]string{429: "quota", 500: "Gemini 500", 200: "no summary"} {
+	for code, want := range map[int]string{429: "quota", 503: "overloaded", 500: "Gemini 500", 200: "no summary"} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(code)
 			w.Write([]byte(`{"candidates":[]}`))
 		}))
 		_, err := Gemini{Base: srv.URL, Client: srv.Client()}.Summarize("u")
 		srv.Close()
-		if err == nil || !strings.Contains(err.Error(), want) || (code == 429) != errors.Is(err, ErrQuota) {
+		if err == nil || !strings.Contains(err.Error(), want) || (code == 429 || code == 503) != errors.Is(err, ErrTryLater) {
 			t.Errorf("%d: got %v", code, err)
 		}
 	}
@@ -120,7 +120,7 @@ func TestRun(t *testing.T) {
 			case strings.HasSuffix(url, "bad"):
 				return Summary{}, errors.New("private video")
 			case strings.HasSuffix(url, "quota"):
-				return Summary{}, ErrQuota
+				return Summary{}, ErrTryLater
 			}
 			return Summary{Verdict: "skim", Tags: []string{"a", "b"}}, nil
 		},

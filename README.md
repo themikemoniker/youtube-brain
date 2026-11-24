@@ -21,9 +21,9 @@ Markdown note in a Drive folder and a row in an index Sheet, then moves to a "Su
 ## How it behaves
 
 - A video that already has a Sheet row is skipped. Delete its row to retry it.
-- When Gemini returns 429 (the free-tier daily limit), the run stops and the rest waits for the next run, so a large
-  backlog drains over several days. `run --max N` caps a run at N videos.
-- Any other failure gets an `error` row and the video stays in Digest.
+- When Gemini returns 429 (the free-tier daily limit) or 503 (overloaded), the run stops and the rest waits for the
+  next run, so a large backlog drains over several days. `run --max N` caps a run at N videos.
+- Any other failure, including a timeout, gets an `error` row and the video stays in Digest.
 - A video moves by being added to Summarized first, then removed from Digest, so it's never in neither.
 
 ## One-time setup

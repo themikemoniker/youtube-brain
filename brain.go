@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const model = "gemini-2.5-flash"
+const model = "gemini-3.8-flash"
 
 var header = []string{"videoId", "title", "channel", "added", "verdict", "tags", "summarized", "note", "url", "error"}
 
@@ -34,8 +34,9 @@ var schema = json.RawMessage(`{
   "required": ["summary", "keyClaim", "verdict", "tags"]
 }`)
 
-// ErrQuota means Gemini returned 429: stop the run, the rest waits for the next one.
-var ErrQuota = errors.New("Gemini quota reached")
+// ErrTryLater means Gemini returned 429 (daily quota) or 503 (overloaded): stop the run, the rest waits for the
+// next one. Writing error rows instead would skip those videos until their rows were deleted.
+var ErrTryLater = errors.New("Gemini says try later")
 
 type Summary struct {
 	Summary  []string `json:"summary"`
@@ -75,8 +76,11 @@ func (g Gemini) Summarize(url string) (Summary, error) {
 	}
 	defer res.Body.Close()
 	raw, _ := io.ReadAll(res.Body)
-	if res.StatusCode == http.StatusTooManyRequests {
-		return Summary{}, ErrQuota
+	switch res.StatusCode {
+	case http.StatusTooManyRequests:
+		return Summary{}, fmt.Errorf("%w: 429, quota reached", ErrTryLater)
+	case http.StatusServiceUnavailable:
+		return Summary{}, fmt.Errorf("%w: 503, overloaded", ErrTryLater)
 	}
 	if res.StatusCode != http.StatusOK {
 		return Summary{}, fmt.Errorf("Gemini %d: %s", res.StatusCode, trunc(string(raw), 200))
@@ -150,8 +154,8 @@ func (b Brain) Run(max int) (int, error) {
 		base := []string{it.VideoID, it.Title, it.Channel, it.Added}
 
 		s, err := b.Summarize(url)
-		if errors.Is(err, ErrQuota) {
-			log.Print("Gemini quota reached; the rest waits for the next run.")
+		if errors.Is(err, ErrTryLater) {
+			log.Printf("%v; the rest waits for the next run.", err)
 			break
 		}
 		var note string

@@ -2,7 +2,7 @@
 // to a Drive folder, indexes it in a Sheet, and moves the video to the "Summarized" playlist.
 // Watch Later can't be used: the YouTube API refuses it (watchLaterNotAccessible).
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-3.8-flash";
 const RUN_BUDGET_MS = 4.5 * 60 * 1000; // Apps Script kills a run at 6 minutes; the rest waits for the next run
 const HEADER = [
   "videoId",
