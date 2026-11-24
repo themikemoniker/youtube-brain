@@ -44,7 +44,7 @@ All files live in `~/.config/youtube-brain/`, outside the repo.
    ```sh
    go install github.com/themikemoniker/youtube-brain@latest
    youtube-brain test 'https://www.youtube.com/watch?v=9hE5-98ZeCg'   # checks the key; writes nothing
-   youtube-brain auth    # opens Google sign-in, saves token.json
+   youtube-brain auth    # two Google sign-ins (Google refuses YouTube and Drive in one), saves two tokens
    youtube-brain setup   # creates the folder, Sheet and playlists; prints the Digest link
    ```
 

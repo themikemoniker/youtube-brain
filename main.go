@@ -33,10 +33,19 @@ const usage = `usage: youtube-brain <command>
   run [--max N] summarize new videos in Digest
   test <url>   summarize one video and print it, writing nothing
 
-Files live in ~/.config/youtube-brain/: client_secret.json (your OAuth client), token.json, config.json.
+Files live in ~/.config/youtube-brain/: client_secret.json (your OAuth client), token-youtube.json and token-drive.json, config.json.
 The Gemini key comes from GEMINI_API_KEY or "gemini_api_key" in config.json.`
 
-var scopes = []string{youtube.YoutubeScope, drive.DriveFileScope, sheets.SpreadsheetsScope}
+// Google refuses the YouTube and drive.file scopes in one sign-in, so auth asks twice and saves two tokens.
+type grant struct {
+	file   string
+	scopes []string
+}
+
+var (
+	ytGrant    = grant{"token-youtube.json", []string{youtube.YoutubeScope}}
+	driveGrant = grant{"token-drive.json", []string{drive.DriveFileScope, sheets.SpreadsheetsScope}}
+)
 
 type Config struct {
 	GeminiAPIKey         string `json:"gemini_api_key,omitempty"`
@@ -115,18 +124,28 @@ func gemini(c Config) (Gemini, error) {
 	return Gemini{Key: key, Base: "https://generativelanguage.googleapis.com", Client: &http.Client{Timeout: 5 * time.Minute}}, nil
 }
 
-func oauthConfig() (*oauth2.Config, error) {
+func oauthConfig(g grant) (*oauth2.Config, error) {
 	path := filepath.Join(dir, "client_secret.json")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("no OAuth client at %s: download your desktop OAuth client JSON there (see README)", path)
 	}
-	return google.ConfigFromJSON(b, scopes...)
+	return google.ConfigFromJSON(b, g.scopes...)
 }
 
-// auth runs the desktop OAuth flow with a loopback redirect and saves the token.
 func auth() error {
-	oc, err := oauthConfig()
+	for i, g := range []grant{ytGrant, driveGrant} {
+		fmt.Printf("Sign-in %d of 2 (%s)\n", i+1, strings.Join(g.scopes, ", "))
+		if err := signIn(g); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// signIn runs the desktop OAuth flow with a loopback redirect and saves the token.
+func signIn(g grant) error {
+	oc, err := oauthConfig(g)
 	if err != nil {
 		return err
 	}
@@ -163,10 +182,10 @@ func auth() error {
 	if err != nil {
 		return err
 	}
-	if err := writeJSON("token.json", tok); err != nil {
+	if err := writeJSON(g.file, tok); err != nil {
 		return err
 	}
-	fmt.Println("Saved", filepath.Join(dir, "token.json"))
+	fmt.Println("Saved", filepath.Join(dir, g.file))
 	return nil
 }
 
@@ -183,12 +202,12 @@ type services struct {
 	sh  *sheets.Service
 }
 
-func connect() (*services, error) {
-	oc, err := oauthConfig()
+func client(ctx context.Context, g grant) (option.ClientOption, error) {
+	oc, err := oauthConfig(g)
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "token.json"))
+	b, err := os.ReadFile(filepath.Join(dir, g.file))
 	if err != nil {
 		return nil, errors.New("not signed in: run `youtube-brain auth` first")
 	}
@@ -196,16 +215,27 @@ func connect() (*services, error) {
 	if err := json.Unmarshal(b, &tok); err != nil {
 		return nil, err
 	}
+	return option.WithHTTPClient(oc.Client(ctx, &tok)), nil
+}
+
+func connect() (*services, error) {
 	ctx := context.Background()
-	opt := option.WithHTTPClient(oc.Client(ctx, &tok))
+	ytOpt, err := client(ctx, ytGrant)
+	if err != nil {
+		return nil, err
+	}
+	driveOpt, err := client(ctx, driveGrant)
+	if err != nil {
+		return nil, err
+	}
 	s := &services{ctx: ctx}
-	if s.yt, err = youtube.NewService(ctx, opt); err != nil {
+	if s.yt, err = youtube.NewService(ctx, ytOpt); err != nil {
 		return nil, err
 	}
-	if s.dr, err = drive.NewService(ctx, opt); err != nil {
+	if s.dr, err = drive.NewService(ctx, driveOpt); err != nil {
 		return nil, err
 	}
-	if s.sh, err = sheets.NewService(ctx, opt); err != nil {
+	if s.sh, err = sheets.NewService(ctx, driveOpt); err != nil {
 		return nil, err
 	}
 	return s, nil
