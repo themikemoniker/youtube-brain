@@ -61,5 +61,6 @@ Examples are in [`deploy/`](deploy/), with install commands in each file's comme
 
 ## Model
 
-`model` in `brain.go` is the only place the model name lives. The Apps Script's optional daily email isn't in the
+`model` in `brain.go` is the only place the model name lives. It is Flash-Lite because the bigger Flash models were
+overloaded (503) on the free tier, and Lite costs about a third as much if you ever turn on billing. The Apps Script's optional daily email isn't in the
 CLI; the Sheet is the digest.

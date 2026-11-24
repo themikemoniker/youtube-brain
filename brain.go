@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const model = "gemini-3.8-flash"
+const model = "gemini-3.5-flash-lite"
 
 var header = []string{"videoId", "title", "channel", "added", "verdict", "tags", "summarized", "note", "url", "error"}
 
