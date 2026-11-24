@@ -198,7 +198,11 @@ func (b Brain) Run(max int) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("listing Digest: %w", err)
 	}
-	done, tried := 0, 0
+	done, tried, streak := 0, 0, 0
+	// Some videos get a 503 every time while Gemini answers others fine. Skip them, and once a later video gets an
+	// answer, give them error rows so they stop blocking the queue. Two 503s in a row means Gemini itself is busy.
+	// ponytail: two adjacent always-503 videos still stop every run; delete one from Digest if that ever happens.
+	var busy [][]string
 	for _, it := range items {
 		if seen[it.VideoID] {
 			continue // a row already exists; delete it to retry the video
@@ -225,11 +229,28 @@ func (b Brain) Run(max int) (int, error) {
 			dur = clock(d.Duration)
 		}
 
+		errRow := func(msg string) []string {
+			return append(append([]string{}, base...), "error", "", stamp, "", url, trunc(msg, 300), "", views, dur)
+		}
+
 		s, err := b.Summarize(url, Context(d, b.Profile, now))
+		if errors.Is(err, errOverloaded) && streak == 0 {
+			streak++
+			log.Printf("%s: %v; skipping it for now", it.VideoID, err)
+			busy = append(busy, errRow("Gemini returned 503 for this video while answering others; delete this row to retry"))
+			continue
+		}
 		if errors.Is(err, ErrTryLater) {
 			log.Printf("%v; the rest waits for the next run.", err)
 			break
 		}
+		streak = 0
+		for _, r := range busy { // Gemini answered this one, so the earlier 503s were about those videos
+			if err := b.Index.Append(r); err != nil {
+				return done, fmt.Errorf("writing the index sheet: %w", err)
+			}
+		}
+		busy = nil
 		var note string
 		if err == nil {
 			note, err = b.Notes.Write(NoteName(now, it.Title), NoteMarkdown(it, url, d, s, now))
@@ -237,7 +258,7 @@ func (b Brain) Run(max int) (int, error) {
 		if err != nil {
 			// Private/unlisted videos and timeouts land here and stay in Digest.
 			log.Printf("%s: %v", it.VideoID, err)
-			if err := b.Index.Append(append(base, "error", "", stamp, "", url, trunc(err.Error(), 300), "", views, dur)); err != nil {
+			if err := b.Index.Append(errRow(err.Error())); err != nil {
 				return done, fmt.Errorf("writing the index sheet: %w", err)
 			}
 			continue

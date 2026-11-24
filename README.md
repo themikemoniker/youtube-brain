@@ -30,8 +30,10 @@ the tools mentioned, how popular and well received the video is, and how well it
 ## How it behaves
 
 - A video that already has a Sheet row is skipped. Delete its row to retry it.
-- A 503 (Gemini overloaded) is retried twice, 30s and 60s apart. If it persists, or Gemini returns 429 (the free-tier
-  daily limit), the run stops and the rest waits for the next run, so a large backlog drains over several days. `run --max N` caps a run at N videos.
+- A 503 (Gemini overloaded) is retried twice, 30s and 60s apart. If it persists, the video is skipped. If a later video
+  then succeeds, the 503 was about that one video (some always fail this way), so it gets an `error` row instead of
+  blocking the queue. Two 503s in a row, or a 429 (the free-tier daily limit), stop the run, and the rest waits for the
+  next run, so a large backlog drains over several days. `run --max N` caps a run at N videos.
 - Any other failure, including a timeout, gets an `error` row and the video stays in Digest.
 - A video moves by being added to Summarized first, then removed from Digest, so it's never in neither.
 

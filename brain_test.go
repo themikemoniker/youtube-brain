@@ -228,3 +228,28 @@ func TestRun(t *testing.T) {
 		t.Errorf("max 2 asked %v, err %v", asked, err)
 	}
 }
+
+func TestRunSkipsAVideoThatAlways503s(t *testing.T) {
+	yt := &fakeYT{items: []Item{{VideoID: "poison"}, {VideoID: "good"}, {VideoID: "busy1"}, {VideoID: "busy2"}, {VideoID: "never"}}}
+	idx := &fakeIndex{seen: map[string]bool{}}
+	var asked []string
+	n, err := Brain{
+		YT: yt, Notes: &fakeNotes{}, Index: idx, Digest: "D", Summarized: "S", Now: func() time.Time { return now },
+		Summarize: func(url, ctx string) (Summary, error) {
+			asked = append(asked, url[strings.LastIndex(url, "=")+1:])
+			if strings.HasSuffix(url, "good") {
+				return Summary{Verdict: "skim"}, nil
+			}
+			return Summary{}, errOverloaded
+		},
+	}.Run(0)
+	if err != nil || n != 1 || strings.Join(asked, ",") != "poison,good,busy1,busy2" {
+		t.Fatalf("n=%d err=%v asked=%v: poison skipped, good done, two 503s in a row stop", n, err, asked)
+	}
+	if len(idx.rows) != 2 || idx.rows[0][0] != "poison" || idx.rows[0][4] != "error" || idx.rows[1][0] != "good" || idx.rows[1][4] != "skim" {
+		t.Errorf("rows %q: poison gets an error row once good succeeds; busy1 gets none", idx.rows)
+	}
+	if strings.Join(yt.moved, ",") != "good>S" {
+		t.Errorf("moved %v", yt.moved)
+	}
+}
